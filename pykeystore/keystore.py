@@ -5,6 +5,7 @@ import json
 from cryptography.hazmat.primitives import serialization
 from cryptography.fernet import Fernet
 import cryptography.hazmat.backends.openssl.rsa as RSA
+from cryptography import x509
 
 
 class InvalidKeystore( Exception ): pass
@@ -417,7 +418,7 @@ class KeyStore( object ):
 
         return self.__data.setdefault( algo, {} ).setdefault( alias, {} ).get( 'cerificate' ) != None
 
-    def setCertificate( self, alias:str, cert, algo:str = 'RSA' ) -> bool:
+    def setCertificate( self, alias:str, cert: Union[str,bytes,x509.Certificate], algo:str = 'RSA' ) -> bool:
         """Store a certicate in the keystore for the algorithm.
 
         :param alias:           Alias name of the certicate to store
@@ -439,6 +440,10 @@ class KeyStore( object ):
                 enc = 'bytes'
                 fmt = 'PEM'
 
+        elif isinstance( cert, x509.Certificate ):
+            cert = cert.public_bytes(serialization.Encoding.PEM).decode( enc )
+            fmt = 'x509.Certificate'
+
         else:
             raise InvalidParameter( 'key' )
 
@@ -446,7 +451,7 @@ class KeyStore( object ):
         obj.update( { 'certicate': cert, 'fmt': fmt, 'enc': enc } )
         return True
 
-    def getCertificate( self, alias:str, algo:str = 'RSA' ) -> Union[bytes,None]:
+    def getCertificate( self, alias:str, algo:str = 'RSA' ) -> Union[bytes,None,x509.Certificate]:
         """Retrieve a certicate from the keystore for the algorithm.
 
         :param alias:           Alias name of the certicate to retrieve
@@ -458,9 +463,13 @@ class KeyStore( object ):
 
         obj = self.__data.setdefault( algo, {} ).setdefault( alias, {} ).get( 'cerificate' )
         certicate = obj[ 'certicate' ]
-        if obj[ 'fmt' ] == 'PEM':
+        fmt = obj[ 'fmt' ]
+        if fmt == 'PEM':
             if obj[ 'enc' ] == 'bytes':
                 certicate = bytes( certicate )
+
+        elif fmt == 'x509.Certificate':
+            certicate = x509.load_pem_x509_certificate( certicate.encode( obj[ 'enc' ] ) )
 
         return certicate
 

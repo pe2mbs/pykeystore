@@ -100,6 +100,14 @@ class TestKeystoreEx( unittest.TestCase ):
                               right.public_bytes( encoding=serialization.Encoding.PEM,
                                                   format=serialization.PublicFormat.SubjectPublicKeyInfo ) )
 
+        elif isinstance( left, x509.Certificate ) and isinstance( right, x509.Certificate ):
+            self.assertEqual( left.public_bytes( serialization.Encoding.PEM ),
+                              right.public_bytes( serialization.Encoding.PEM ) )
+            self.assertEqual( left.not_valid_before, right.not_valid_before )
+            self.assertEqual( left.not_valid_after, right.not_valid_after )
+            self.assertEqual( str(left.subject), str(right.subject) )
+            self.assertEqual( left.version, right.version )
+
         else:
             raise Exception( "Invalid parameter, left/right must RSA.PrivateKey: {type(left)} / {type(right)}" )
 
@@ -161,6 +169,23 @@ class TestKeystoreEx( unittest.TestCase ):
         self.assertEqual( '<Name(C=NL,ST=Flevoland,L=Almere,O=PE2MBS,CN=CA)>', str( cert.subject ) )
         self.assertEqual( dt, cert.not_valid_before )
         self.assertEqual( dt + timedelta( days = 3650 ), cert.not_valid_after )
+        return
+
+    def test_08_1_add_asymmetric_certicate( self ):
+        private_key = self.__keystore.getPrivateKey( 'my-rsa-keys-internal', 'RSA' )
+        subject = issuer = x509.Name( [ x509.NameAttribute( NameOID.COUNTRY_NAME, u"NL" ),
+                                        x509.NameAttribute( NameOID.STATE_OR_PROVINCE_NAME, u"Flevoland" ),
+                                        x509.NameAttribute( NameOID.LOCALITY_NAME, u"Almere" ),
+                                        x509.NameAttribute( NameOID.ORGANIZATION_NAME, u"PE2MBS" ),
+                                        x509.NameAttribute( NameOID.COMMON_NAME, u"CA" ) ] )
+        dt = datetime.utcnow().replace( microsecond = 0 )
+        root_cert = x509.CertificateBuilder().subject_name( subject ).issuer_name( issuer ). \
+            public_key( private_key.public_key() ).serial_number( x509.random_serial_number() ). \
+            not_valid_before( dt ).not_valid_after( dt + timedelta(days=3650) ). \
+            sign( private_key, hashes.SHA256(), default_backend() )
+        self.__keystore.setCertificate( 'my-rsa-keys-CA-internal', root_cert, 'RSA' )
+        retrieved = self.__keystore.getCertificate( 'my-rsa-keys-CA-internal', 'RSA' )
+        self.assertKeyEqual( root_cert, retrieved )
         return
 
     def test_99_dump( self ):
