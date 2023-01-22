@@ -1,11 +1,12 @@
 from typing import Union
 import logging
-import os
+import chardet
 import json
 from cryptography.fernet import Fernet
 
 
 class InvalidKeystore( Exception ): pass
+class InvalidParameter( Exception ): pass
 
 
 DEFINE_TESTING      = True
@@ -21,12 +22,14 @@ class KeyStore( object ):
     2FA, private and symmetric keys are secondary encrypted.
 
     """
+    __UNIQUE_SIGNATURE_ID   = 'A83CCDA8-7814-4D74-A3EB-F4E239167F87'
+    __VERSION               = 1
+
     def __init__( self, ciphertext: bytes, passphrase: Union[str,bytes] ):
         """Contructor of the keystore
 
         :param ciphertext:          The encrypted keystore data
         :param passphrase:          The passphrase to open the keystore
-        :param keep_passphrase:     True to remember the passphrase within the object (less secure)
         """
         try:
             self.__data:dict    = json.loads( KeyStore.decrypt( KeyStore.correctPassphrase( passphrase ), ciphertext ) )
@@ -34,10 +37,10 @@ class KeyStore( object ):
         except:
             raise InvalidKeystore( 'passphrase wrong or not a valid keystore' )
 
-        if self.__data.get('version') != 1:
+        if self.__data.get('version') != KeyStore.__VERSION:
             raise InvalidKeystore( 'invalid version' )
 
-        elif self.__data.get( 'signature' ) != 'CE01CE01CE01CE01':
+        elif self.__data.get( 'signature' ) != KeyStore.__UNIQUE_SIGNATURE_ID:
             raise InvalidKeystore( 'invalid signature' )
 
         # Part of secure programming
@@ -59,41 +62,38 @@ class KeyStore( object ):
 
     @staticmethod
     def encrypt( password: bytes, value: Union[bytes,str], encoding: str = "utf8" ) -> Union[bytes,str]:
-        """
-            Encrypts a string using Fernet
-            Args:
-                value:      what to encrypt [string/bytes]
-                password:   password to use [bytes]
-            Returns:
-                encrypted string
+        """Encrypts a string using Fernet
+
+        :param value:       what to encrypt [string/bytes]
+        :param password:    password to use [bytes]
+        :param encoding:    encoding to use for encoding/decoding bytes [if None returns bytes]
+        :return:            encrypted string
         """
         if not isinstance( value, bytes ):
-            value = value.encode()
+            value = value.encode( encoding )
 
         block = Fernet( password ).encrypt( value )
         # Part of secure programming
         password.zfill(len( password ))
         value.zfill( len( value ) )
-        return block if encoding == 'bytes' else block.decode( encoding )
+        return block if encoding in ( None, 'bytes' ) else block.decode( encoding )
 
     @staticmethod
     def decrypt( password: bytes, value: Union[bytes,str], encoding: str = "utf8" ) -> Union[bytes,str]:
-        """
-            Encrypts a string using Fernet
-            Args:
-                value:      what to dencrypt [string/bytes]
-                password:   password to use [bytes]
-                encoding:   encoding to use for decoding bytes [if None returns bytes]
-            Returns:
-                decrypted string
+        """Encrypts a string using Fernet
+
+        :param password:    password to use [bytes]
+        :param value:       what to dencrypt [string/bytes]
+        :param encoding:    encoding to use for encoding/decoding bytes [if None returns bytes]
+        :return:            decrypted string in UTF-8 format/bytes unformatted
         """
         if not isinstance( value, bytes ):
-            value = value.encode()
+            value = value.encode( encoding )
 
         out = Fernet( password ).decrypt( value )
         # Part of secure programming
         password.zfill(len( password ))
-        if encoding:
+        if encoding not in ( None, 'bytes' ):
             return out.decode( encoding )
 
         return out
@@ -107,8 +107,8 @@ class KeyStore( object ):
         :param keep_passphrase: True to remember the passphrase within the object (less secure)
         :return:                Instance of the KeyStore class
         """
-        data = { 'version': 1,
-                 'signature': 'CE01CE01CE01CE01',
+        data = { 'version': KeyStore.__VERSION,
+                 'signature': KeyStore.__UNIQUE_SIGNATURE_ID,
                  'passwords': {},
         }
         passphrase          = KeyStore.correctPassphrase( passphrase )
@@ -160,13 +160,13 @@ class KeyStore( object ):
         """
         return isinstance( self.__data.setdefault( 'passwords', {} ).get( account ), str )
 
-    def setPassword( self, account: str, password: str, passphrase: Union[str,bytes], two_fa = None ):
+    def setPassword( self, account: str, password: str, passphrase: Union[str,bytes], two_fa: Union[str,None] = None ):
         """Set the password for am account with optionally the 2FA secret.
 
         :param account:         Name if the account.
         :param password:        The password to store.
         :param two_fa:          The optional 2FA secret to store.
-        :param passphrase:      When Keystore was instanciated with keep_passphrase = False this is mandatory
+        :param passphrase:      The passphrase of the keystore.
         :return:                None
         """
         data = self.__data.setdefault( 'passwords', {} ).setdefault( account, {} )
@@ -177,13 +177,32 @@ class KeyStore( object ):
         # Part of secure programming
         passphrase.zfill(len( passphrase ))
         password.zfill(len( password ))
+        if two_fa is not None:
+            two_fa.zfill(len( two_fa ))
+
+        return
+
+    def set2fa( self, account: str, two_fa: str, passphrase: Union[str,bytes] ):
+        """Set the password for am account with optionally the 2FA secret.
+
+        :param account:         Name if the account.
+        :param two_fa:          The optional 2FA secret to store.
+        :param passphrase:      The passphrase of the keystore.
+        :return:                None
+        """
+        data = self.__data.setdefault( 'passwords', {} ).setdefault( account, {} )
+        data[ '2fa' ] = KeyStore.encrypt( passphrase + account.encode(), two_fa )
+
+        # Part of secure programming
+        passphrase.zfill(len( passphrase ))
+        two_fa.zfill(len( two_fa ))
         return
 
     def getPassword( self, account:str, passphrase: Union[str,bytes] ) -> bytes:
         """Retrieve the password from the keystore for the account
 
         :param account:         Name if the account.
-        :param passphrase:      When Keystore was instanciated with keep_passphrase = False this is mandatory
+        :param passphrase:      The passphrase of the keystore.
         :return:                None or bytes
         """
         data = self.__data.setdefault( 'passwords', {} ).setdefault( account, {} )
@@ -199,7 +218,7 @@ class KeyStore( object ):
         """Retrieve the 2FA secret from the keystore for the account
 
         :param account:         Name if the account.
-        :param passphrase:      When Keystore was instanciated with keep_passphrase = False this is mandatory
+        :param passphrase:      The passphrase of the keystore.
         :return:
         """
         data = self.__data.setdefault( 'passwords', {} ).setdefault( account, {} )
@@ -215,22 +234,18 @@ class KeyStore( object ):
         """Tetrieve the full account details
 
         :param account:         Name if the account.
-        :param passphrase:      When Keystore was instanciated with keep_passphrase = False this is mandatory
+        :param passphrase:      The passphrase of the keystore.
         :return:
         """
+        def secured_data( data, name ):
+            result = data.get( name )
+            if result is None:
+                return result
+
+            return KeyStore.decrypt( passphrase + account.encode(), result )
+
         data = self.__data.setdefault( 'passwords', {} ).setdefault( account, {} )
-        result = ( None, None, None )
-        if '2fa' in data:
-            result = (  account,
-                        KeyStore.decrypt( passphrase + account.encode(), data.get( 'password' ) ),
-                        KeyStore.decrypt( passphrase + account.encode(), data.get( '2fa' ) )
-                     )
-
-        elif 'password' in data:
-            result = (  account,
-                        KeyStore.decrypt( passphrase + account.encode(), data.get( 'password' ) ),
-                        None )
-
+        result = ( account, secured_data( data, 'password' ), secured_data( data, '2fa' ) )
         # Part of secure programming
         passphrase.zfill(len( passphrase ))
         return result
@@ -241,136 +256,196 @@ class KeyStore( object ):
     def hasPrivateKey( self, alias:str, algo:str = 'RSA' ) -> bool:
         """Check if the private key exists in the keystore for the algorithm
 
-        :param alias:           Alias name of the PrivateKey to retrieve
+        :param alias:           Alias name of the private key to check
         :param algo:            The algorithm that the key belong to, when omitted RSA is de default
         :return:
         """
         if not self.__checkAsymmetricAlgorithm( algo ):
             return False
 
-        return self.__data.setdefault( algo, {} ).setdefault( 'private', {} ).get( alias ) != None
+        return self.__data.setdefault( algo, {} ).setdefault( alias, {} ).get( 'private' ) != None
 
-    def setPrivateKey( self, alias:str, key, algo:str, passphrase: Union[str,bytes] ) -> bool:
-        """
+    def setPrivateKey( self, alias:str, key: Union[str,bytes], algo:str, passphrase: Union[str,bytes] ) -> bool:
+        """Set the value of the private key in the keystore for the algorithm, this has a second level of encryption.
 
-        :param alias:
-        :param key:
-        :param algo:
-        :param passphrase:
+        :param alias:           Alias name of the private key to store
+        :param key:             The private key to store in the keystore, this should be in UTF-8 encoding
+                                to avoid conversion issues. Best to provide the private key in PEM format.
+        :param algo:            The algorithm that the key belong to
+        :param passphrase:      The passphrase of the keystore or passphrase that belongs to the private key.
         :return:
         """
         if not self.__checkAsymmetricAlgorithm( algo ):
             return False
 
-        keys = self.__data.setdefault( algo, {} ).setdefault( 'private', {} )
-        keys[ alias ] = KeyStore.encrypt( passphrase + alias.encode(), key )
+        enc = 'utf-8'
+        fmt = 'raw'
+        if isinstance( key, str ):
+            if key.startswith( '-----BEGIN ' ):
+                fmt = 'PEM'
+
+        elif isinstance( key, bytes ):
+            if key.startswith( b'-----BEGIN ' ):
+                enc = 'bytes'
+                fmt = 'PEM'
+
+        else:
+            raise InvalidParameter( 'key' )
+
+        skey = self.__data.setdefault( algo, {} ).setdefault( alias, {} ).setdefault( 'private', {} )
+        skey.update( { 'encoding': enc, 'format': fmt, 'key': KeyStore.encrypt( passphrase + alias.encode(), key ) } )
         # Part of secure programming
         passphrase.zfill( len( passphrase ) )
         key.zfill( len( key ) )
         return True
 
     def getPrivateKey( self, alias:str, algo:str, passphrase: Union[str,bytes] ):
-        """
+        """Retrieve the value of the private key from the keystore for the algorithm, this has a second level of decryption.
 
-        :param alias:
-        :param algo:
-        :param passphrase:
-        :return:
+        :param alias:           Alias name of the private key to retrieve
+        :param algo:            The algorithm that the key belong to
+        :param passphrase:      The passphrase of the keystore or passphrase that belongs to the private key.
+        :return:                returns the private key as UTF-8 string
         """
         if not self.__checkAsymmetricAlgorithm( algo ):
             return None
 
-        result = KeyStore.decrypt( passphrase + alias.encode(), self.__data.setdefault( algo, {} ).setdefault( 'private', {} ).get( alias ) )
+        obj = self.__data.setdefault( algo, {} ).setdefault( alias, {} ).get( 'private' )
+        key = KeyStore.decrypt( passphrase + alias.encode(), obj[ 'key' ] )
+        if obj[ 'format' ] == 'PEM':
+            if obj[ 'encoding' ] == 'bytes':
+                key = bytes( key )
+
         # Part of secure programming
         passphrase.zfill( len( passphrase ) )
-        return result
+        return key
 
     def hasPublicKey( self, alias:str, algo:str = 'RSA' ) -> bool:
-        """
+        """Check a public key exists in the keystore for the algorithm.
 
-        :param alias:
-        :param algo:
+        :param alias:           Alias name of the public to check
+        :param algo:            The algorithm that the key belong to
         :return:
         """
         if not self.__checkAsymmetricAlgorithm( algo ):
             return False
 
-        return self.__data.setdefault( algo, {} ).setdefault( 'public', {} ).get( alias ) != None
+        return self.__data.setdefault( algo, {} ).setdefault( alias, {} ).get( 'public' ) != None
 
     def setPublicKey( self, alias:str, key = None, algo:str = 'RSA' ) -> bool:
-        """
+        """Store a public key in the keystore for the algorithm.
 
-        :param alias:
-        :param key:
-        :param algo:
+        :param alias:           Alias name of the public key to store
+        :param key:             The public key to store in the keystore
+        :param algo:            The algorithm that the key belong to
         :return:
         """
         if not self.__checkAsymmetricAlgorithm( algo ):
             return False
 
-        keys = self.__data.setdefault( algo, {} ).setdefault( 'public', {} )
-        keys[ alias ] = key
+        enc = 'utf-8'
+        fmt = 'raw'
+        if isinstance( key, str ):
+            if key.startswith( '-----BEGIN ' ):
+                fmt = 'PEM'
+
+        elif isinstance( key, bytes ):
+            if key.startswith( b'-----BEGIN ' ):
+                enc = 'bytes'
+                fmt = 'PEM'
+
+        else:
+            raise InvalidParameter( 'key' )
+
+        obj = self.__data.setdefault( algo, {} ).setdefault( alias, {} ).setdefault( 'public', {} )
+        obj.update( { 'key': key, 'format': fmt, 'encoding': enc } )
         return True
 
     def getPublicKey( self, alias:str, algo:str = 'RSA' ):
-        """
+        """Retrieve a public key from the keystore for the algorithm.
 
-        :param alias:
-        :param algo:
+        :param alias:           Alias name of the public key to retrieve
+        :param algo:            The algorithm that the key belong to
         :return:
         """
         if not self.__checkAsymmetricAlgorithm( algo ):
             return None
 
-        return self.__data.setdefault( algo, {} ).setdefault( 'public', {} ).get( alias )
+        obj =  self.__data.setdefault( algo, {} ).setdefault( alias, {} ).get( 'public' )
+        key = obj[ 'key' ]
+        if obj[ 'format' ] == 'PEM':
+            if obj[ 'encoding' ] == 'bytes':
+                key = bytes( key )
+
+        return key
 
     def hasCertificate( self, alias:str, algo:str = 'RSA' ) -> bool:
-        """
+        """Check a certicate exists in the keystore for the algorithm.
 
-        :param alias:
-        :param algo:
+        :param alias:           Alias name of the certicate to check
+        :param algo:            The algorithm that the certicate belong to
         :return:
         """
         if not self.__checkAsymmetricAlgorithm( algo ):
             return False
 
-        return self.__data.setdefault( algo, {} ).setdefault( 'cerificate', {} ).get( alias ) != None
+        return self.__data.setdefault( algo, {} ).setdefault( alias, {} ).get( 'cerificate' ) != None
 
     def setCertificate( self, alias:str, cert, algo:str = 'RSA' ) -> bool:
-        """
+        """Store a certicate in the keystore for the algorithm.
 
-        :param alias:
-        :param cert:
-        :param algo:
+        :param alias:           Alias name of the certicate to store
+        :param cert:            The certicate to store in the keystore
+        :param algo:            The algorithm that the certicate belong to
         :return:
         """
         if not self.__checkAsymmetricAlgorithm( algo ):
             return False
 
-        keys = self.__data.setdefault( algo, {} ).setdefault( 'cerificate', {} )
-        keys[ alias ] = cert
+        enc = 'utf-8'
+        fmt = 'raw'
+        if isinstance( cert, str ):
+            if cert.startswith( '-----BEGIN ' ):
+                fmt = 'PEM'
+
+        elif isinstance( cert, bytes ):
+            if cert.startswith( b'-----BEGIN ' ):
+                enc = 'bytes'
+                fmt = 'PEM'
+
+        else:
+            raise InvalidParameter( 'key' )
+
+        obj = self.__data.setdefault( algo, {} ).setdefault( alias, {} ).setdefault( 'cerificate', {} )
+        obj.update( { 'certicate': cert, 'format': fmt, 'encoding': enc } )
         return True
 
     def getCertificate( self, alias:str, algo:str = 'RSA' ) -> Union[bytes,None]:
-        """
+        """Retrieve a certicate from the keystore for the algorithm.
 
-        :param alias:
-        :param algo:
+        :param alias:           Alias name of the certicate to retrieve
+        :param algo:            The algorithm that the certicate belong to
         :return:
         """
         if not self.__checkAsymmetricAlgorithm( algo ):
             return None
 
-        return self.__data.setdefault( algo, {} ).setdefault( 'public', {} ).get( alias )
+        obj = self.__data.setdefault( algo, {} ).setdefault( alias, {} ).get( 'cerificate' )
+        certicate = obj[ 'certicate' ]
+        if obj[ 'format' ] == 'PEM':
+            if obj[ 'encoding' ] == 'bytes':
+                certicate = bytes( certicate )
+
+        return certicate
 
     def __checkSymmetricAlgorithm( self, algo:str ):
         return algo in ( 'DES', 'AES', 'IDEA', 'BLOWFISH', 'RC4', 'RC5', 'RC6' )
 
     def hasEncriptioneKey( self, alias:str, algo:str ) -> bool:
-        """
+        """Check an encryption key exists in the keystore for the algorithm.
 
-        :param alias:
-        :param algo:
+        :param alias:           Alias name of the encryption key to check
+        :param algo:            The algorithm that the key belong to
         :return:
         """
         if not self.__checkSymmetricAlgorithm( algo ):
@@ -379,12 +454,12 @@ class KeyStore( object ):
         return self.__data.setdefault( algo, {} ).get( alias ) != None
 
     def setEncriptioneKey( self, alias:str, algo:str, key, passphrase: Union[str,bytes] ):
-        """
+        """Store an encryption key in the keystore for the algorithm.
 
-        :param alias:
-        :param algo:
-        :param key:
-        :param passphrase:
+        :param alias:           Alias name of the encryption key to store
+        :param algo:            The algorithm that the key belong to
+        :param key:             The encryption key to store in the keystore
+        :param passphrase:      The passphrase of the keystore or passphrase that belongs to the encryption key.
         :return:
         """
         if not self.__checkSymmetricAlgorithm( algo ):
@@ -393,32 +468,56 @@ class KeyStore( object ):
         if algo == 'DES':
             if isinstance( key, bytes ) and len( key ) in ( 8, 16 ):
                 raise
+
             elif isinstance( key, str ) and len( key ) in ( 16, 32 ):
                 raise
+
         elif algo == 'AES':
             if isinstance( key, bytes ) and len( key ) in ( 128, 192, 256 ):
                 raise
+
             elif isinstance( key, str ) and len( key ) in ( 256, 324, 512 ):
                 raise
 
-        self.__data.setdefault( algo, {} )[ alias ] = KeyStore.encrypt( passphrase + alias.encode(), key )
+
+        enc = 'utf-8'
+        fmt = 'raw'
+        if isinstance( key, str ):
+            pass
+
+        elif isinstance( key, bytes ):
+            enc = 'bytes'
+
+
+        else:
+            raise InvalidParameter( 'key' )
+
+        obj = self.__data.setdefault( algo, {} ).setdefault( alias, {} )
+        obj.update( { 'cihper': KeyStore.encrypt( passphrase + alias.encode(), key ), 'fmt': fmt, 'enc': enc } )
         # Part of secure programming
         passphrase.zfill( len( passphrase ) )
         key.zfill( len( key ) )
         return True
 
     def getEncriptioneKey( self, algo:str, alias:str, passphrase: Union[str,bytes] ) -> Union[None,bytes]:
-        """
+        """Retrieve an encryption key from the keystore for the algorithm.
 
-        :param algo:
-        :param alias:
-        :param passphrase:
+        :param algo:            The algorithm that the key belong to
+        :param alias:           Alias name of the encryption key to retrieve
+        :param passphrase:      The passphrase of the keystore or passphrase that belongs to the encryption key.
         :return:
         """
         if not self.__checkSymmetricAlgorithm( algo ):
             return None
 
-        result = KeyStore.decrypt( passphrase + alias.encode(), self.__data.setdefault( algo, {} ).get( alias ) )
+        obj = self.__data.setdefault( algo, {} ).get( alias, {} )
+        result = None
+        if obj.get( 'cihper', None ) is not None:
+            result = KeyStore.decrypt( passphrase + alias.encode(), obj[ 'cihper' ] )
+            if obj[ 'enc' ] == 'bytes':
+                result = result.encode( 'utf-8' )
+
+        # Part of secure programming
         passphrase.zfill( len( passphrase ) )
         return result
 

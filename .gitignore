@@ -2,4 +2,6 @@ build/
 pykeystore.egg-info/
 .idea/
 venv/
-
+__pycache__/
+tests/data/*.pyks
+tests/data/.passphrase-ex
