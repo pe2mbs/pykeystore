@@ -2,7 +2,9 @@ from typing import Union
 import logging
 import chardet
 import json
+from cryptography.hazmat.primitives import serialization
 from cryptography.fernet import Fernet
+import cryptography.hazmat.backends.openssl.rsa as RSA
 
 
 class InvalidKeystore( Exception ): pass
@@ -265,7 +267,7 @@ class KeyStore( object ):
 
         return self.__data.setdefault( algo, {} ).setdefault( alias, {} ).get( 'private' ) != None
 
-    def setPrivateKey( self, alias:str, key: Union[str,bytes], algo:str, passphrase: Union[str,bytes] ) -> bool:
+    def setPrivateKey( self, alias:str, key: Union[str,bytes,RSA.RSAPrivateKey], algo:str, passphrase: Union[str,bytes] ) -> bool:
         """Set the value of the private key in the keystore for the algorithm, this has a second level of encryption.
 
         :param alias:           Alias name of the private key to store
@@ -289,17 +291,26 @@ class KeyStore( object ):
                 enc = 'bytes'
                 fmt = 'PEM'
 
+        elif isinstance( key, RSA.RSAPrivateKey ):
+            key = key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption()
+            ).decode('utf-8')
+            enc = 'utf-8'
+            fmt = 'RSA._RSAPrivateKey'
+
         else:
             raise InvalidParameter( 'key' )
 
         skey = self.__data.setdefault( algo, {} ).setdefault( alias, {} ).setdefault( 'private', {} )
-        skey.update( { 'encoding': enc, 'format': fmt, 'key': KeyStore.encrypt( passphrase + alias.encode(), key ) } )
+        skey.update( { 'enc': enc, 'fmt': fmt, 'key': KeyStore.encrypt( passphrase + alias.encode(), key ) } )
         # Part of secure programming
         passphrase.zfill( len( passphrase ) )
         key.zfill( len( key ) )
         return True
 
-    def getPrivateKey( self, alias:str, algo:str, passphrase: Union[str,bytes] ):
+    def getPrivateKey( self, alias:str, algo:str, passphrase: Union[str,bytes] ) -> Union[str,bytes,RSA._RSAPrivateKey]:
         """Retrieve the value of the private key from the keystore for the algorithm, this has a second level of decryption.
 
         :param alias:           Alias name of the private key to retrieve
@@ -312,9 +323,13 @@ class KeyStore( object ):
 
         obj = self.__data.setdefault( algo, {} ).setdefault( alias, {} ).get( 'private' )
         key = KeyStore.decrypt( passphrase + alias.encode(), obj[ 'key' ] )
-        if obj[ 'format' ] == 'PEM':
-            if obj[ 'encoding' ] == 'bytes':
+        fmt = obj[ 'fmt' ]
+        if fmt == 'PEM':
+            if obj[ 'enc' ] == 'bytes':
                 key = bytes( key )
+
+        elif fmt == 'RSA._RSAPrivateKey':
+            key = serialization.load_pem_private_key( key.encode('utf-8'), None )
 
         # Part of secure programming
         passphrase.zfill( len( passphrase ) )
@@ -354,11 +369,18 @@ class KeyStore( object ):
                 enc = 'bytes'
                 fmt = 'PEM'
 
+        elif isinstance( key, RSA.RSAPublicKey ):
+            key = key.public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo
+            ).decode('utf-8')
+            fmt = 'RSA.RSAPublicKey'
+
         else:
             raise InvalidParameter( 'key' )
 
         obj = self.__data.setdefault( algo, {} ).setdefault( alias, {} ).setdefault( 'public', {} )
-        obj.update( { 'key': key, 'format': fmt, 'encoding': enc } )
+        obj.update( { 'key': key, 'fmt': fmt, 'enc': enc } )
         return True
 
     def getPublicKey( self, alias:str, algo:str = 'RSA' ):
@@ -373,9 +395,13 @@ class KeyStore( object ):
 
         obj =  self.__data.setdefault( algo, {} ).setdefault( alias, {} ).get( 'public' )
         key = obj[ 'key' ]
-        if obj[ 'format' ] == 'PEM':
-            if obj[ 'encoding' ] == 'bytes':
+        fmt = obj[ 'fmt' ]
+        if fmt == 'PEM':
+            if obj[ 'enc' ] == 'bytes':
                 key = bytes( key )
+
+        elif fmt == 'RSA.RSAPublicKey':
+            key = serialization.load_pem_public_key( key.encode( 'utf-8' ) )
 
         return key
 
@@ -417,7 +443,7 @@ class KeyStore( object ):
             raise InvalidParameter( 'key' )
 
         obj = self.__data.setdefault( algo, {} ).setdefault( alias, {} ).setdefault( 'cerificate', {} )
-        obj.update( { 'certicate': cert, 'format': fmt, 'encoding': enc } )
+        obj.update( { 'certicate': cert, 'fmt': fmt, 'enc': enc } )
         return True
 
     def getCertificate( self, alias:str, algo:str = 'RSA' ) -> Union[bytes,None]:
@@ -432,8 +458,8 @@ class KeyStore( object ):
 
         obj = self.__data.setdefault( algo, {} ).setdefault( alias, {} ).get( 'cerificate' )
         certicate = obj[ 'certicate' ]
-        if obj[ 'format' ] == 'PEM':
-            if obj[ 'encoding' ] == 'bytes':
+        if obj[ 'fmt' ] == 'PEM':
+            if obj[ 'enc' ] == 'bytes':
                 certicate = bytes( certicate )
 
         return certicate

@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.backends import default_backend
+import cryptography.hazmat.backends.openssl.rsa as RSA
 
 
 class TestKeystoreEx( unittest.TestCase ):
@@ -84,6 +85,36 @@ class TestKeystoreEx( unittest.TestCase ):
         self.assertEqual( pem, retrieved )
         return
 
+    def assertKeyEqual( self, left, right ):
+        if isinstance( left, RSA.RSAPrivateKey ) and isinstance( right, RSA.RSAPrivateKey ):
+            self.assertEqual( left.private_bytes(encoding=serialization.Encoding.PEM,
+                                                        format=serialization.PrivateFormat.PKCS8,
+                                                        encryption_algorithm=serialization.NoEncryption()),
+                              right.private_bytes(encoding=serialization.Encoding.PEM,
+                                                      format=serialization.PrivateFormat.PKCS8,
+                                                      encryption_algorithm=serialization.NoEncryption()) )
+
+        elif isinstance( left, RSA.RSAPublicKey ) and isinstance( right, RSA.RSAPublicKey ):
+            self.assertEqual( left.public_bytes( encoding=serialization.Encoding.PEM,
+                                                 format=serialization.PublicFormat.SubjectPublicKeyInfo ),
+                              right.public_bytes( encoding=serialization.Encoding.PEM,
+                                                  format=serialization.PublicFormat.SubjectPublicKeyInfo ) )
+
+        else:
+            raise Exception( "Invalid parameter, left/right must RSA.PrivateKey: {type(left)} / {type(right)}" )
+
+        return
+
+    def test_06_1_add_asymmetric_private_key( self ):
+        private_key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=2048,
+        )
+        self.__keystore.setPrivateKey( 'my-rsa-keys-internal', private_key, 'RSA' )
+        retrieved = self.__keystore.getPrivateKey( 'my-rsa-keys-internal', 'RSA' )
+        self.assertKeyEqual( private_key, retrieved )
+        return
+
     def test_07_add_asymmetric_public_key( self ):
         ppem = self.__keystore.getPrivateKey( 'my-rsa-keys', 'RSA' )
         private_key = serialization.load_pem_private_key(
@@ -98,6 +129,14 @@ class TestKeystoreEx( unittest.TestCase ):
         self.__keystore.setPublicKey( 'my-rsa-keys', pem, 'RSA' )
         retrieved = self.__keystore.getPublicKey( 'my-rsa-keys', 'RSA' )
         self.assertEqual( pem, retrieved )
+        return
+
+    def test_07_1_add_asymmetric_public_key( self ):
+        private_key = self.__keystore.getPrivateKey( 'my-rsa-keys-internal', 'RSA' )
+        public_key = private_key.public_key()
+        self.__keystore.setPublicKey( 'my-rsa-keys-internal', public_key, 'RSA' )
+        retrieved = self.__keystore.getPublicKey( 'my-rsa-keys-internal', 'RSA' )
+        self.assertKeyEqual( public_key, retrieved )
         return
 
     def test_08_add_asymmetric_certicate( self ):
